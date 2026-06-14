@@ -31,7 +31,7 @@ def oscillator_strength(n_lower, n_upper):
 Ry = 13.6  # eV, Rydberg energy
 
 def energy_level(n):
-    """the energy level"""
+    """Hydrogen energy level (binding energy), positive value in eV."""
     return Ry / n**2
 
 def transition_energy(p, n):
@@ -149,7 +149,7 @@ def K_deexcitation(p, n, kTe):
 def K_recombination(p, kTe):
     """
     Vriens & Smeets Eq. (9). Three-body recombination into level p.
-    Rate per unit volume = ne^2 * alpha, alpha has units cm^6 s^-1!!!!
+    Rate per unit volume = ne^2 * alpha, so alpha has units cm^6 s^-1.
     """
     E_pi = energy_level(p)
     eps = E_pi / kTe
@@ -167,12 +167,13 @@ def build_rate_matrix(n_levels, kTe, ne):
     kTe: electron temperature in eV
     ne: electron density in cm^-3
     
-    Fix n(1) = 1 (ground state population) and solve for n(2)...n(n_levels).
+    We fix n(1) = 1 (ground state population) and solve for n(2)...n(n_levels).
     The matrix equation is (n_levels - 1) x (n_levels - 1).
     """
     N = n_levels
     
-    # indices: level n corresponds to array index n-2
+    # indices: level n corresponds to array index n-2 (since we exclude n=1)
+    # so level 2 -> index 0, level 3 -> index 1, etc.
     
     size = N - 1  # number of unknowns: levels 2 through N
     M = np.zeros((size, size))
@@ -181,7 +182,7 @@ def build_rate_matrix(n_levels, kTe, ne):
     for i_lvl in range(2, N + 1):  # level i
         row = i_lvl - 2  # row index in matrix
         
-        # =terms that REMOVE population from level i (go on diagonal) 
+        # === terms that REMOVE population from level i (go on diagonal) ===
         loss = 0.0
         
         # excitation from i to higher levels
@@ -201,7 +202,7 @@ def build_rate_matrix(n_levels, kTe, ne):
         
         M[row, row] = -loss
         
-        # terms that ADD population to level i (off-diagonal and source)
+        # === terms that ADD population to level i (off-diagonal and source) ===
         
         for j in range(2, N + 1):  # from level j (j != i, j >= 2)
             if j == i_lvl:
@@ -217,7 +218,7 @@ def build_rate_matrix(n_levels, kTe, ne):
                 # radiative decay from j down to i
                 M[row, col] += einstein_A(j, i_lvl)
         
-        # ==contributions from level 1 (ground state, fixed n(1)=1) -> source ==
+        # === contributions from level 1 (ground state, fixed n(1)=1) -> source ===
         # excitation from ground state to level i
         source[row] -= ne * K_excitation(1, i_lvl, kTe) * 1.0  # n(1) = 1
         # recombination from continuum into level i
@@ -228,7 +229,8 @@ def build_rate_matrix(n_levels, kTe, ne):
 
 def solve_steady_state(n_levels, kTe, ne):
     """
-    Solve for level pops
+    Solve for level populations. Returns array of populations n(1)...n(n_levels).
+    n(1) is fixed to 1, everything else is relative to that.
     """
     M, source = build_rate_matrix(n_levels, kTe, ne)
     
@@ -245,7 +247,12 @@ def solve_steady_state(n_levels, kTe, ne):
 
 def balmer_ratio(pops, ratio="ba"):
     """
-    Compute Balmer line ratios from pops
+    Compute Balmer line ratios from populations.
+    Intensity of line is proportional to A(upper->2) * n(upper).
+    
+    ratio="ba" -> Hbeta/Halpha = [A(4->2)*n(4)] / [A(3->2)*n(3)]
+    ratio="ga" -> Hgamma/Halpha
+    ratio="gb" -> Hgamma/Hbeta
     """
     I_alpha = einstein_A(3, 2) * pops[2]  # n=3, index 2
     I_beta  = einstein_A(4, 2) * pops[3]  # n=4, index 3
@@ -329,7 +336,7 @@ def test_convergence():
         print(f"N={N:2d}: Hb/Ha={ratio_ba:.4f}, Hg/Hb={ratio_gb:.4f}, "
               f"n(3)={pops[2]:.3e}, n(last)={pops[-1]:.3e}")
 
-def test_limits():
+def test_coronal_limit():
     print("Sanity Checks Coronal ")
     kTe = 10.0
     
@@ -365,6 +372,20 @@ def test_limits():
     #     print(f"  n({i})/n(1): model={pops_very_high[i-1]:.4e}, Boltzmann={boltz:.4e}, "
     #           f"ratio={pops_very_high[i-1]/boltz:.4f}")
 
+def test_lte():
+    kTe = 10.0
+    E_exc_3 = transition_energy(1, 3)
+    E_exc_4 = transition_energy(1, 4)
+    n3_boltz = 9.0 * np.exp(-E_exc_3 / kTe)
+    n4_boltz = 16.0 * np.exp(-E_exc_4 / kTe)
+    ratio_lte = (einstein_A(4, 2) * n4_boltz) / (einstein_A(3, 2) * n3_boltz)
+    
+    pops = solve_steady_state(15, kTe, 1e21)
+    ratio_model = balmer_ratio(pops, "ba")
+    
+    print(f"LTE (Boltzmann):  Hb/Ha = {ratio_lte:.4f}")
+    print(f"Model at ne=1e21: Hb/Ha = {ratio_model:.4f}")
+
 def run_contour_plots():
     import matplotlib.pyplot as plt
     
@@ -394,6 +415,39 @@ def run_contour_plots():
     c2 = ax2.contourf(Te_grid, Ne_grid, ratio_gb, levels=20, cmap='viridis')
     ax2.set_xscale('log')
     ax2.set_yscale('log')
+    ax2.set_xlabel('kTe (eV)')
+    ax2.set_ylabel('ne (cm^-3)')
+    ax2.set_title('Hgamma / Hbeta')
+    plt.colorbar(c2, ax=ax2)
+    
+    plt.tight_layout()
+    plt.savefig('balmer_ratios.png', dpi=150)
+    plt.show()
+    print("Done!")
+    import matplotlib.pyplot as plt
+    
+    print("=== Computing Contour Plots ===")
+    n_levels = 15
+    kTe_arr = np.linspace(0, 2.3, 30)
+    ne_arr = np.linspace(10, 15, 30)
+    
+    print("Computing Hbeta/Halpha grid...")
+    ratio_ba = compute_ratio_grid(n_levels, kTe_arr, ne_arr, "ba")
+    
+    print("Computing Hgamma/Hbeta grid...")
+    ratio_gb = compute_ratio_grid(n_levels, kTe_arr, ne_arr, "gb")
+    
+    Te_grid, Ne_grid = np.meshgrid(kTe_arr, ne_arr)
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    c1 = ax1.contourf(Te_grid, Ne_grid, ratio_ba, levels=20, cmap='viridis')
+    ax1.set_xlabel('kTe (eV)')
+    ax1.set_ylabel('ne (cm^-3)')
+    ax1.set_title('Hbeta / Halpha')
+    plt.colorbar(c1, ax=ax1)
+    
+    c2 = ax2.contourf(Te_grid, Ne_grid, ratio_gb, levels=20, cmap='viridis')
     ax2.set_xlabel('kTe (eV)')
     ax2.set_ylabel('ne (cm^-3)')
     ax2.set_title('Hgamma / Hbeta')
@@ -448,6 +502,7 @@ def plot_vinoth_comparison():
     plt.show()
 
 if __name__ == "__main__":
+    # comment/uncomment what you want to run
     #test_oscillator_strengths()
     #test_bethe_coefficients()
     #test_excitation_rates()
@@ -455,6 +510,6 @@ if __name__ == "__main__":
     #test_deexcitation()
     #test_convergence()
     #test_limits()
-    plot_vinoth_comparison()
+    #plot_vinoth_comparison()
     #run_contour_plots()
 
